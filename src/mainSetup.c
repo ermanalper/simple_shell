@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
- 
+#include "../include/builtin.h"
 #define MAX_LINE 80 /* 80 chars per line, per command, should be enough. */
  
 /* The setup function below will not return any value, but it will just: read
