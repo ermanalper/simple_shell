@@ -16,11 +16,12 @@ void setup(char inputBuffer[], char *args[],int *background)
         i,      /* loop index for accessing inputBuffer array */
         start,  /* index where beginning of next command parameter is */
         ct;     /* index of where to place the next parameter into args[] */
-    
+    int in_quotes = 0; /* flag to track whether we are inside double quotes */
+
     ct = 0;
-        
+
     /* read what the user enters on the command line */
-    length = read(STDIN_FILENO,inputBuffer,MAX_LINE);  
+    length = read(STDIN_FILENO,inputBuffer,MAX_LINE);
 
     /* 0 is the system predefined file descriptor for stdin (standard input),
        which is the user's screen in this case. inputBuffer by itself is the
@@ -45,8 +46,26 @@ void setup(char inputBuffer[], char *args[],int *background)
     for (i=0;i<length;i++){ /* examine every character in the inputBuffer */
 
         switch (inputBuffer[i]){
+	    case '"':                 /* toggle quote state and strip quote delimiters */
+		if (!in_quotes){
+		    in_quotes = 1;
+		    if (start == -1)
+			start = i + 1; /* start token after opening quote */
+		} else {
+		    in_quotes = 0;
+		    inputBuffer[i] = '\0'; /* terminate token at closing quote */
+		    if (start != -1){
+			args[ct] = &inputBuffer[start];
+			ct++;
+			start = -1;
+		    }
+		}
+		break;
+
 	    case ' ':
 	    case '\t' :               /* argument separators */
+		if (in_quotes)        /* ignore whitespace inside quotes */
+		    break;
 		if(start != -1){
                     args[ct] = &inputBuffer[start];    /* set up pointer */
 		    ct++;
@@ -57,7 +76,7 @@ void setup(char inputBuffer[], char *args[],int *background)
 
             case '\n':                 /* should be the final char examined */
 		if (start != -1){
-                    args[ct] = &inputBuffer[start];     
+                    args[ct] = &inputBuffer[start];
 		    ct++;
 		}
                 inputBuffer[i] = '\0';
@@ -67,7 +86,7 @@ void setup(char inputBuffer[], char *args[],int *background)
 	    default :             /* some other character */
 		if (start == -1)
 		    start = i;
-                if (inputBuffer[i] == '&'){
+                if (!in_quotes && inputBuffer[i] == '&'){ /* only treat '&' as background outside quotes */
 		    *background  = 1;
                     inputBuffer[i-1] = '\0';
 		}
