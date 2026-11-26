@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
- 
+#include <string.h>
+#include "../include/alias_list.h"
+#include "../include/builtin.h"
 #define MAX_LINE 80 /* 80 chars per line, per command, should be enough. */
  
 /* The setup function below will not return any value, but it will just: read
@@ -10,17 +12,18 @@ in the next command line; separate it into distinct arguments (using blanks as
 delimiters), and set the args array entries to point to the beginning of what
 will become null-terminated, C-style strings. */
 
-void setup(char inputBuffer[], char *args[],int *background)
+int setup(char inputBuffer[], char *args[],int *background)
 {
     int length, /* # of characters in the command line */
         i,      /* loop index for accessing inputBuffer array */
         start,  /* index where beginning of next command parameter is */
         ct;     /* index of where to place the next parameter into args[] */
-    
+    int in_quotes = 0; /* flag to track whether we are inside double quotes */
+
     ct = 0;
-        
+
     /* read what the user enters on the command line */
-    length = read(STDIN_FILENO,inputBuffer,MAX_LINE);  
+    length = read(STDIN_FILENO,inputBuffer,MAX_LINE);
 
     /* 0 is the system predefined file descriptor for stdin (standard input),
        which is the user's screen in this case. inputBuffer by itself is the
@@ -41,12 +44,30 @@ void setup(char inputBuffer[], char *args[],int *background)
 	exit(-1);           /* terminate with error code of -1 */
     }
 
-	printf(">>%s<<",inputBuffer);
+//	printf(">>%s<<",inputBuffer);
     for (i=0;i<length;i++){ /* examine every character in the inputBuffer */
 
         switch (inputBuffer[i]){
+	    case '"':                 /* toggle quote state and strip quote delimiters */
+		if (!in_quotes){
+		    in_quotes = 1;
+		    if (start == -1)
+			start = i + 1; /* start token after opening quote */
+		} else {
+		    in_quotes = 0;
+		    inputBuffer[i] = '\0'; /* terminate token at closing quote */
+		    if (start != -1){
+			args[ct] = &inputBuffer[start];
+			ct++;
+			start = -1;
+		    }
+		}
+		break;
+
 	    case ' ':
 	    case '\t' :               /* argument separators */
+		if (in_quotes)        /* ignore whitespace inside quotes */
+		    break;
 		if(start != -1){
                     args[ct] = &inputBuffer[start];    /* set up pointer */
 		    ct++;
@@ -57,7 +78,7 @@ void setup(char inputBuffer[], char *args[],int *background)
 
             case '\n':                 /* should be the final char examined */
 		if (start != -1){
-                    args[ct] = &inputBuffer[start];     
+                    args[ct] = &inputBuffer[start];
 		    ct++;
 		}
                 inputBuffer[i] = '\0';
@@ -67,7 +88,7 @@ void setup(char inputBuffer[], char *args[],int *background)
 	    default :             /* some other character */
 		if (start == -1)
 		    start = i;
-                if (inputBuffer[i] == '&'){
+                if (!in_quotes && inputBuffer[i] == '&'){ /* only treat '&' as background outside quotes */
 		    *background  = 1;
                     inputBuffer[i-1] = '\0';
 		}
@@ -75,22 +96,74 @@ void setup(char inputBuffer[], char *args[],int *background)
      }    /* end of for */
      args[ct] = NULL; /* just in case the input line was > 80 */
 
-	for (i = 0; i <= ct; i++)
-		printf("args %d = %s\n",i,args[i]);
+	//for (i = 0; i <= ct; i++)
+	//	printf("args %d = %s\n",i,args[i]);
+
+	return ct;
 } /* end of setup routine */
- 
+
+
+static int expand_alias(char *alias_buf, size_t buf_size, char *args[], int argc, int max_args)
+{
+	const char *alias_cmd = get_command_by_name(args[0]);
+	if (alias_cmd == NULL) {
+		return argc; // not an alias
+	}
+
+	// copy the previously aliased cmd
+	strncpy(alias_buf, alias_cmd, buf_size - 1);
+	alias_buf[buf_size - 1] = '\0';
+
+	char *extra_args[MAX_LINE / 2 + 1];
+	int extra_count = 0;
+	for (int i = 1; i < argc; i++) {
+		extra_args[extra_count++] = args[i];
+	}
+
+	// tokenize the alias cmd and put before the args
+	int new_argc = 0;
+	char *token = strtok(alias_buf, " \t");
+	while (token != NULL && new_argc < max_args - 1) {
+		args[new_argc++] = token;
+		token = strtok(NULL, " \t");
+	}
+
+	// add the additional args
+	for (int i = 0; i < extra_count && new_argc < max_args - 1; i++) {
+		args[new_argc++] = extra_args[i];
+	}
+
+	args[new_argc] = NULL;
+	return new_argc;
+}
 int main(void)
 {
 			setvbuf(stdout, NULL, _IONBF, 0);
             char inputBuffer[MAX_LINE]; /*buffer to hold command entered */
+			char aliasBuffer[MAX_LINE]; /* for alias expansion */
             int background; /* equals 1 if a command is followed by '&' */
             char *args[MAX_LINE/2 + 1]; /*command line arguments */
+			int argc;
             while (1){
                         background = 0;
                         printf("myshell: ");
                         /*setup() calls exit() when Control-D is entered */
-                        setup(inputBuffer, args, &background);
-                       
+                        argc = setup(inputBuffer, args, &background);
+						if (argc == 0 || args[0] == NULL) { continue; }
+            			// see if it is an alias
+            			argc = expand_alias(aliasBuffer, sizeof(aliasBuffer), args, argc, MAX_LINE/2 + 1);
+            			builtin_fn_t builtin = find_builtin_fn(args[0]);
+            			if (builtin != NULL)
+            			{
+            				//built-in function
+            				printf("builtin\n");
+            				builtin(argc, args);
+            			}
+            			else
+            			{
+            				//not a built-in function
+            			}
+
                         /** the steps are:
                         (1) fork a child process using fork()
                         (2) the child process will invoke execv()
